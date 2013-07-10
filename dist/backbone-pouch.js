@@ -1,14 +1,20 @@
-/*! backbone-pouch - v1.1.0 - 2013-06-15
+/*! backbone-pouch - v1.1.0 - 2013-07-10
 * http://jo.github.io/backbone-pouch/
 * Copyright (c) 2013 Johannes J. Schmidt; Licensed MIT */
 (function(root) {
   'use strict';
-  
+
   var BackbonePouch;
   if (typeof exports === 'object') {
     BackbonePouch = exports;
   } else {
     BackbonePouch = root.BackbonePouch = {};
+  }
+
+  // Require jquery for promises
+  var $ = root.$;
+  if (!$ && (typeof require === 'function')) {
+    $ = require('jquery');
   }
 
   // Require Underscore, if we're on the server, and it's not already present.
@@ -76,6 +82,7 @@
     applyDefaults(defaults, BackbonePouch.defaults);
 
     var adapter = function(method, model, options) {
+      var syncing = $.Deferred();
       options = options || {};
       applyDefaults(options, model && model.pouch || {});
       applyDefaults(options, defaults);
@@ -93,6 +100,7 @@
 
       function callback(err, response) {
         if (err) {
+          syncing.reject(err);
           return options.error && options.error(err);
         }
         if (method === 'create' || method === 'update' || method === 'patch') {
@@ -148,7 +156,9 @@
             });
           }
         }
-        return options.success && options.success(response);
+        // Backbone ensures that options map has success function
+        options.success(response);
+        return syncing.resolve(model, response);
       }
 
       model.trigger('request', model, options.db, options);
@@ -156,14 +166,16 @@
       if (method === 'read') {
         // get single model
         if (model.id) {
-          return options.db.get(model.id, options.options.get, callback);
+          options.db.get(model.id, options.options.get, callback);
+          return syncing.promise();
         }
         // query view or spatial index
         if (options.fetch === 'query' || options.fetch === 'spatial') {
           if (!options.options[options.fetch].fun) {
             throw new Error('A "' + options.fetch + '.fun" object must be specified');
           }
-          return options.db[options.fetch](options.options[options.fetch].fun, options.options[options.fetch], callback);
+          options.db[options.fetch](options.options[options.fetch].fun, options.options[options.fetch], callback);
+          return syncing.promise();
         }
         // allDocs or spatial query
         options.db[options.fetch](options.options[options.fetch], callback);
@@ -171,7 +183,7 @@
         options.db[methodMap[method]](model.toJSON(), options.options[methodMap[method]], callback);
       }
 
-      return options;
+      return syncing.promise();
     };
 
     adapter.defaults = defaults;
@@ -193,18 +205,18 @@
       if (model.collection && model.collection.pouch && model.collection.pouch.db) {
         return model.collection.pouch.db;
       }
-      
+
       if (defaults.db) {
         return defaults.db;
       }
-      
+
       var options = model.sync();
       if (options.db) {
         return options.db;
       }
 
       // TODO: ask sync adapter
-        
+
       throw new Error('A "db" property must be specified');
     }
 
@@ -216,7 +228,7 @@
             if (typeof filter === 'function') {
               return filter(key, atts[key]);
             }
-            
+
             return atts[key].content_type.match(filter);
           });
         }
@@ -245,7 +257,7 @@
         if (!this.id) {
           this.set({ _id: Math.uuid() }, { silent: true });
         }
-        
+
         var db = getPouch(this);
         var that = this;
         return db.putAttachment(attachmentId(this.id, name), this.get('_rev'), blob, type, function(err, response) {
